@@ -9,7 +9,7 @@ pub const REG_DEF_INDEX: &'static str =
     r"\#define[\s*]+([^\s*]+)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*)\)";
 pub const REG_BITS: &'static str =
     r"\#define[\s*]+([^\s*]+)_(S|V)[\s*]+\(?(0x[0-9a-fA-F]+|[0-9]+)\)?";
-pub const REG_BIT_INFO: &'static str = r":[\s]+([0-9A-Za-z_\/]+)[\s]+;bitpos:\[([0-9]+):?([0-9]+)?\][\s];default:[\s]+(.*)[\s];[\s]\*\/";
+pub const REG_BIT_INFO: &'static str = r":[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
 pub const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/"; 
 #[derive(Debug, Default)]
 pub struct Peripheral {

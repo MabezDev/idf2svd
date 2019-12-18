@@ -1,6 +1,6 @@
 pub const SOC_BASE_PATH: &'static str = "esp-idf/components/soc/esp32/include/soc/";
 
-use header2svd::{REG_BASE, REG_BITS, REG_DEF, REG_DEF_INDEX, Peripheral, Register, REG_DESC};
+use header2svd::{REG_BASE, REG_BITS, REG_DEF, REG_DEF_INDEX, Peripheral, Register, REG_DESC, REG_BIT_INFO};
 use regex::Regex;
 use std::fs::File;
 use std::io::prelude::*;
@@ -14,6 +14,7 @@ fn main() {
     let re_reg = Regex::new(REG_DEF).unwrap();
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
     let re_reg_desc = Regex::new(REG_DESC).unwrap();
+    let re_reg_bit_info = Regex::new(REG_BIT_INFO).unwrap();
     let re_reg_bits = Regex::new(REG_BITS).unwrap();
     
 
