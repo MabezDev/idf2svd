@@ -1,6 +1,4 @@
-
 use std::ops::RangeInclusive;
-
 
 /* Regex's to find all the peripheral addresses */
 pub const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
@@ -9,16 +7,17 @@ pub const REG_DEF_INDEX: &'static str =
     r"\#define[\s*]+([^\s*]+)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*)\)";
 pub const REG_BITS: &'static str =
     r"\#define[\s*]+([^\s*]+)_(S|V)[\s*]+\(?(0x[0-9a-fA-F]+|[0-9]+)\)?";
-pub const REG_BIT_INFO: &'static str = r":[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
-pub const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/"; 
-#[derive(Debug, Default)]
+pub const REG_BIT_INFO: &'static str =
+    r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
+pub const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
+#[derive(Debug, Default, Clone)]
 pub struct Peripheral {
     pub description: String,
     pub address: u32,
     pub registers: Vec<Register>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Register {
     /// Register Name
     pub name: String,
@@ -35,7 +34,7 @@ pub struct Register {
     pub bit_fields: Vec<BitField>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BitField {
     /// Field Name
     pub name: String,
@@ -49,7 +48,7 @@ pub struct BitField {
     pub description: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Bits {
     Single(u8),
     Range(RangeInclusive<u8>),
