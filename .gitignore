@@ -1,2 +1,3 @@
 /target
 **/*.rs.bk
+esp32.svd
