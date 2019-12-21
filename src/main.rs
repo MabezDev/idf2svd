@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
 use svd_parser::{
-    bitrange::BitRangeType, encode::Encode, fieldinfo::FieldInfoBuilder,
+bitrange::BitRangeType, encode::Encode, fieldinfo::FieldInfoBuilder,
     peripheral::PeripheralBuilder, registerinfo::RegisterInfoBuilder, BitRange, Field,
     Register as SvdRegister, RegisterCluster,
 };
