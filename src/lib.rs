@@ -127,6 +127,9 @@ enum State {
 
 pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
+    let mut invalid_peripherals = vec![];
+    let mut invalid_registers = vec![];
+    let mut invalid_bit_fields = vec![];
 
     let filname = path.to_owned() + "soc.h";
     let re_base = Regex::new(REG_BASE).unwrap();
@@ -142,14 +145,24 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
         let name = &captures[1];
         let index = &captures[2];
         let desc = &captures[3];
-        // println!("{}({}): {}", name, index, desc);
-        let intr = Interrupt {
+        let _intr = Interrupt {
             name: name.to_string(),
             description: Some(desc.to_string()),
             value: index.parse().unwrap(),
         };
-        println!("{:#?}", intr);
+        // println!("{:#?}", intr);
     }
+
+    /*
+       Theses are indexed, we seed these as they cannot be derived from the docs
+       These blocks are identical, so we need to do some post processing to properly index
+       and offset these
+    */
+    peripherals.insert("I2C".to_string(), Peripheral::default());
+    peripherals.insert("SPI".to_string(), Peripheral::default());
+    peripherals.insert("TIMG".to_string(), Peripheral::default());
+    peripherals.insert("MCPWM".to_string(), Peripheral::default());
+    peripherals.insert("UHCI".to_string(), Peripheral::default());
 
     /* Peripheral base addresses */
     for captures in re_base.captures_iter(soc_h.as_str()) {
@@ -171,10 +184,10 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
             let name = name.to_str().unwrap();
             let mut buffer = vec![];
             let file_data = file_to_string(name);
-            println!("Searching {}", name);
+            // println!("Searching {}", name);
 
             let mut state = State::FindReg;
-            for line in file_data.lines() {
+            for (i, line) in file_data.lines().enumerate() {
                 loop {
                     match state {
                         State::FindReg => {
@@ -184,6 +197,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                 let pname = &m[2];
                                 let offset = &m[3].trim_start_matches("0x");
                                 if reg_name.ends_with("(i)") {
+                                    invalid_registers.push(reg_name.to_string());
                                     // some indexed still get through, ignore them
                                     break;
                                 }
@@ -194,10 +208,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                     r.address = addr;
                                     state = State::FindBitFieldInfo(pname.to_string(), r);
                                 } else {
-                                    println!(
-                                        "Failed to parse register for {}: {}",
-                                        reg_name, offset
-                                    )
+                                    invalid_registers.push(reg_name.to_string());
                                 }
                             } else if let Some(m) = re_reg_index.captures(line) {
                                 let reg_name = &m[1];
@@ -207,14 +218,12 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                 if let Ok(addr) = u32::from_str_radix(offset, 16) {
                                     let mut r = Register::default();
                                     r.description = reg_name.to_string();
-                                    r.name = reg_name.to_string();
+                                    // strip off the (i)
+                                    r.name = reg_name[..reg_name.len() - 3].to_string();
                                     r.address = addr;
                                     state = State::FindBitFieldInfo(pname.to_string(), r);
                                 } else {
-                                    println!(
-                                        "Failed to parse register for {}: {}",
-                                        reg_name, offset
-                                    )
+                                    invalid_registers.push(reg_name.to_string());
                                 }
                             }
                             break; // next line
@@ -231,7 +240,9 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                     }
                                     (Some(b), None) => Bits::Single(b.parse().unwrap()),
                                     _ => {
-                                        println!("Failed to parse bitpos {}", &m[3]);
+                                        // println!("Failed to parse bitpos {}", &m[3]);
+                                        invalid_bit_fields
+                                            .push((bf_name.to_string(), m[3].to_string()));
                                         continue;
                                     }
                                 };
@@ -248,7 +259,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                 };
                                 state = State::FindDescription(pname.clone(), reg.clone(), bf);
                             } else {
-                                println!("Failed to match reg info");
+                                println!("Failed to match reg info at {}:{}", name, i);
                                 state = State::FindReg;
                             }
                             break; // next line
@@ -271,7 +282,8 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                     p.registers.push(reg.clone());
                                 } else {
                                     // TODO indexed peripherals wont come up here
-                                    println!("No periphal called {}", pname.to_string());
+                                    // println!("No periphal called {}", pname.to_string());
+                                    invalid_peripherals.push(pname.to_string());
                                 }
                                 state = State::FindReg;
                                 break; // next line
@@ -286,6 +298,28 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                 }
             }
         });
+
+    println!("Parsed idf for peripherals information.");
+    if invalid_peripherals.len() > 0 {
+        println!(
+            "The following peripherals failed to parse {:?}",
+            invalid_peripherals
+        );
+    }
+
+    if invalid_registers.len() > 0 {
+        println!(
+            "The following registers failed to parse {:?}",
+            invalid_registers
+        );
+    }
+
+    if invalid_bit_fields.len() > 0 {
+        println!(
+            "The following bit_fields failed to parse {:?}",
+            invalid_bit_fields
+        );
+    }
 
     peripherals
 }
