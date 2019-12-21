@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::ops::RangeInclusive;
+use std::str::FromStr;
 
 /* Regex's to find all the peripheral addresses */
 pub const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
@@ -14,11 +15,20 @@ pub const REG_BITS: &'static str =
 pub const REG_BIT_INFO: &'static str =
     r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
 pub const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
+pub const INTERRUPTS: &'static str =
+    r"\#define[\s]ETS_([0-9A-Za-z_/]+)_SOURCE[\s]+([0-9]+)/\*\*<\s([0-9A-Za-z_/\s,]+)\*/";
+
 #[derive(Debug, Default, Clone)]
 pub struct Peripheral {
     pub description: String,
     pub address: u32,
     pub registers: Vec<Register>,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Interrupt {
+    pub name: String,
+    pub description: Option<String>,
+    pub value: u32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -45,7 +55,7 @@ pub struct BitField {
     /// Bits
     pub bits: Bits,
     /// Type
-    // pub type_: Type,
+    pub type_: Type,
     /// Reset Value
     pub reset_value: u32,
     /// Description
@@ -64,18 +74,49 @@ impl Default for Bits {
     }
 }
 
-// #[derive(Debug)]
-// pub enum Type {
-//     ReadAsZero,
-//     ReadOnly,
-//     ReadWrite,
-//     ReadWriteSetOnly,
-//     ReadableClearOnRead,
-//     ReadableClearOnWrite,
-//     WriteAsZero,
-//     WriteOnly,
-//     WriteToClear,
-// }
+use svd_parser::Access;
+
+#[derive(Debug, Copy, Clone)]
+pub enum Type {
+    // ReadAsZero,
+    ReadOnly,
+    ReadWrite,
+    WriteOnly,
+    // ReadWriteSetOnly,
+    // ReadableClearOnRead,
+    // ReadableClearOnWrite,
+    // WriteAsZero,
+    // WriteToClear,
+}
+
+impl From<Type> for Access {
+    fn from(t: Type) -> Self {
+        match t {
+            Type::ReadOnly => Access::ReadOnly,
+            Type::ReadWrite => Access::ReadWrite,
+            Type::WriteOnly => Access::WriteOnly,
+        }
+    }
+}
+
+impl Default for Type {
+    fn default() -> Type {
+        Type::ReadWrite
+    }
+}
+
+impl FromStr for Type {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Type, Self::Err> {
+        Ok(match s {
+            "RO" | "R/O" => Type::ReadOnly,
+            "RW" | "R/W" => Type::ReadWrite,
+            "WO" | "W/O" => Type::WriteOnly,
+            _ => return Err(String::from("Invalid BitField type: ") + &String::from(s)),
+        })
+    }
+}
 
 enum State {
     FindReg,
@@ -93,9 +134,25 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
     let re_reg_desc = Regex::new(REG_DESC).unwrap();
     let re_reg_bit_info = Regex::new(REG_BIT_INFO).unwrap();
-    // let re_reg_bits = Regex::new(REG_BITS).unwrap();
+    let re_interrupts = Regex::new(INTERRUPTS).unwrap();
 
-    for captures in re_base.captures_iter(file_to_string(&filname).as_str()) {
+    let soc_h = file_to_string(&filname);
+
+    for captures in re_interrupts.captures_iter(soc_h.as_str()) {
+        let name = &captures[1];
+        let index = &captures[2];
+        let desc = &captures[3];
+        // println!("{}({}): {}", name, index, desc);
+        let intr = Interrupt {
+            name: name.to_string(),
+            description: Some(desc.to_string()),
+            value: index.parse().unwrap(),
+        };
+        println!("{:#?}", intr);
+    }
+
+    /* Peripheral base addresses */
+    for captures in re_base.captures_iter(soc_h.as_str()) {
         let peripheral = &captures[1];
         let address = &captures[2];
         let mut p = Peripheral::default();
@@ -165,7 +222,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                         State::FindBitFieldInfo(ref mut pname, ref mut reg) => {
                             if let Some(m) = re_reg_bit_info.captures(line) {
                                 let bf_name = &m[1];
-                                let _access_type = &m[2]; // TODO
+                                let access_type = &m[2]; // TODO
                                 let bits = &mut m[3].split(':');
                                 let _default_val = &m[4]; // TODO
                                 let bits = match (bits.next(), bits.next()) {
@@ -182,6 +239,10 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                 let bf = BitField {
                                     name: bf_name.to_string(),
                                     bits,
+                                    type_: Type::from_str(access_type).unwrap_or_else(|s| {
+                                        println!("{}", s);
+                                        Type::default()
+                                    }),
                                     reset_value: 0,
                                     ..Default::default()
                                 };
