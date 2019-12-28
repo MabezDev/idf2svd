@@ -7,9 +7,9 @@ use std::str::FromStr;
 
 /* Regex's to find all the peripheral addresses */
 pub const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
-pub const REG_DEF: &'static str = r"\#define[\s*]+([^\s*]+)[\s*]+\(DR_REG_(.*)_BASE \+ (.*)\)";
+pub const REG_DEF: &'static str = r"\#define[\s*]+([^\s*]+)_REG[\s*]+\(DR_REG_(.*)_BASE \+ (.*)\)";
 pub const REG_DEF_INDEX: &'static str =
-    r"\#define[\s*]+([^\s*]+)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*)\)";
+    r"\#define[\s*]+([^\s*]+)_REG\(i\)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*)\)";
 pub const REG_BITS: &'static str =
     r"\#define[\s*]+([^\s*]+)_(S|V)[\s*]+\(?(0x[0-9a-fA-F]+|[0-9]+)\)?";
 pub const REG_BIT_INFO: &'static str =
@@ -217,9 +217,8 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
 
                                 if let Ok(addr) = u32::from_str_radix(offset, 16) {
                                     let mut r = Register::default();
+                                    r.name = reg_name.to_string();
                                     r.description = reg_name.to_string();
-                                    // strip off the (i)
-                                    r.name = reg_name[..reg_name.len() - 3].to_string();
                                     r.address = addr;
                                     state = State::FindBitFieldInfo(pname.to_string(), r);
                                 } else {
