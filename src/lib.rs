@@ -7,13 +7,14 @@ use std::str::FromStr;
 
 /* Regex's to find all the peripheral addresses */
 pub const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
-pub const REG_DEF: &'static str = r"\#define[\s*]+([^\s*]+)_REG[\s*]+\(DR_REG_(.*)_BASE \+ (.*)\)";
+pub const REG_DEF: &'static str =
+    r"\#define[\s*]+([0-9A-Za-z]+)_([0-9A-Za-z_]+)_REG[\s*]+\(DR_REG_(.*)_BASE \+ (.*)\)";
 pub const REG_DEF_INDEX: &'static str =
-    r"\#define[\s*]+([^\s*]+)_REG\(i\)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*)\)";
+    r"\#define[\s*]+([0-9A-Za-z]+)_([0-9A-Za-z_]+)_REG\(i\)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*)\)";
 pub const REG_BITS: &'static str =
-    r"\#define[\s*]+([^\s*]+)_(S|V)[\s*]+\(?(0x[0-9a-fA-F]+|[0-9]+)\)?";
+    r"\#define[\s*]+([0-9A-Za-z]+)_([0-9A-Za-z_]+)_(S|V)[\s*]+\(?(0x[0-9a-fA-F]+|[0-9]+)\)?";
 pub const REG_BIT_INFO: &'static str =
-    r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
+    r"\*[\s]+([0-9A-Za-z]+)_([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*";
 pub const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
 pub const INTERRUPTS: &'static str =
     r"\#define[\s]ETS_([0-9A-Za-z_/]+)_SOURCE[\s]+([0-9]+)/\*\*<\s([0-9A-Za-z_/\s,]+)\*/";
@@ -125,6 +126,8 @@ enum State {
     CheckEnd(String, Register),
 }
 
+const PREFIX_WHITELIST: &[&str] = &["SLC"];
+
 pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
     let mut invalid_peripherals = vec![];
@@ -191,33 +194,28 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                 loop {
                     match state {
                         State::FindReg => {
-                            /* Normal register definitions */
-                            if let Some(m) = re_reg.captures(line) {
-                                let reg_name = &m[1];
-                                let pname = &m[2];
-                                let offset = &m[3].trim_start_matches("0x");
+                            let captures = re_reg.captures(line).or(re_reg_index.captures(line));
+                            if let Some(m) = captures {
+                                let _prefix = &m[1];
+                                let reg_name = &m[2];
+                                let pname = &m[3];
+                                let offset = &m[4].trim_start_matches("0x");
                                 if reg_name.ends_with("(i)") {
                                     invalid_registers.push(reg_name.to_string());
-                                    // some indexed still get through, ignore them
+                                    // some indexed still get through, ignore them for now
                                     break;
                                 }
-                                if let Ok(addr) = u32::from_str_radix(offset, 16) {
-                                    let mut r = Register::default();
-                                    r.description = reg_name.to_string();
-                                    r.name = reg_name.to_string();
-                                    r.address = addr;
-                                    state = State::FindBitFieldInfo(pname.to_string(), r);
-                                } else {
-                                    invalid_registers.push(reg_name.to_string());
-                                }
-                            } else if let Some(m) = re_reg_index.captures(line) {
-                                let reg_name = &m[1];
-                                let pname = &m[2];
-                                let offset = &m[3].trim_start_matches("0x");
 
                                 if let Ok(addr) = u32::from_str_radix(offset, 16) {
                                     let mut r = Register::default();
-                                    r.name = reg_name.to_string();
+                                    r.name = match normalize(pname, reg_name) {
+                                        Ok(n) => n,
+                                        Err(e) => {
+                                            invalid_registers.push(e);
+                                            break; //move on
+                                        }
+                                    };
+
                                     r.description = reg_name.to_string();
                                     r.address = addr;
                                     state = State::FindBitFieldInfo(pname.to_string(), r);
@@ -229,10 +227,11 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                         }
                         State::FindBitFieldInfo(ref mut pname, ref mut reg) => {
                             if let Some(m) = re_reg_bit_info.captures(line) {
-                                let bf_name = &m[1];
-                                let access_type = &m[2]; // TODO
-                                let bits = &mut m[3].split(':');
-                                let _default_val = &m[4]; // TODO
+                                let _prefix = &m[1];
+                                let bf_name = &m[2];
+                                let access_type = &m[3]; // TODO
+                                let bits = &mut m[4].split(':');
+                                let _default_val = &m[5]; // TODO
                                 let bits = match (bits.next(), bits.next()) {
                                     (Some(h), Some(l)) => {
                                         Bits::Range(l.parse().unwrap()..=h.parse().unwrap())
@@ -246,8 +245,16 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                                     }
                                 };
 
+                                let name = match normalize(pname, bf_name) {
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        invalid_bit_fields.push((e, m[3].to_string()));
+                                        break; //move on
+                                    }
+                                };
+
                                 let bf = BitField {
-                                    name: bf_name.to_string(),
+                                    name,
                                     bits,
                                     type_: Type::from_str(access_type).unwrap_or_else(|s| {
                                         println!("{}", s);
@@ -328,4 +335,35 @@ fn file_to_string(fil: &str) -> String {
     let mut data = String::new();
     soc.read_to_string(&mut data).unwrap();
     data
+}
+
+fn normalize(prefix: &str, reg_name: &str) -> Result<String, String> {
+    let name = if PREFIX_WHITELIST.contains(&&*prefix) {
+        /*
+           Some registers itsj ust easier to keep the prefix, as they contain
+           lots of invalid svd characters
+        */
+        prefix.to_string() + &String::from_str("_").unwrap() + &reg_name.to_string()
+    } else if reg_name.starts_with(|c: char| c.is_numeric()) {
+        /*
+           For simpler numeric names, we can just move the number
+        */
+        let mut new = reg_name.chars();
+        let tmp = new.nth(0).unwrap(); // remove first char
+        if new.clone().nth(0).unwrap() == '_' {
+            new.next(); // remove that _ too
+        }
+        let mut new_name = new.as_str().to_string();
+        assert!(!new_name.starts_with("_"));
+        if let Some(underscore_idx) = new_name.find('_') {
+            new_name.insert(underscore_idx, tmp);
+            new_name
+        } else {
+            return Err(reg_name.to_string());
+        }
+    } else {
+        reg_name.to_string()
+    };
+
+    Ok(name)
 }
