@@ -298,6 +298,22 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
             }
         });
 
+    for (k, p) in &peripherals {
+        if p.registers.is_empty() {
+            invalid_peripherals.push(k.clone());
+        }
+    }
+
+    for (k, p) in &peripherals {
+        if p.address == 0 {
+            println!("Dead periph: {}", k);
+            // invalid_peripherals.push(k.clone());
+        }
+    }
+
+    // TODO remove invalid peripherals from list
+    invalid_peripherals.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
     println!("Parsed idf for peripherals information.");
     if invalid_peripherals.len() > 0 {
         println!(
