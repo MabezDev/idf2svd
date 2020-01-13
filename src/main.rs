@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
 use svd_parser::{
-    bitrange::BitRangeType, encode::Encode, fieldinfo::FieldInfoBuilder,
-    peripheral::PeripheralBuilder, registerinfo::RegisterInfoBuilder, BitRange, Field,
+    addressblock::AddressBlock, bitrange::BitRangeType, cpu::CpuBuilder, device::DeviceBuilder,
+    encode::Encode, endian::Endian, fieldinfo::FieldInfoBuilder, peripheral::PeripheralBuilder,
+    registerinfo::RegisterInfoBuilder, BitRange, Device as SvdDevice, Field,
     Register as SvdRegister, RegisterCluster,
 };
-use xmltree::Element;
 
 fn main() {
     let peripherals = parse_idf(SOC_BASE_PATH);
@@ -18,10 +18,10 @@ fn main() {
     let svd = create_svd(peripherals).unwrap();
 
     let f = BufWriter::new(File::create("esp32.svd").unwrap());
-    svd.write(f).unwrap();
+    svd.encode().unwrap().write(f).unwrap();
 }
 
-fn create_svd(peripherals: HashMap<String, Peripheral>) -> Result<Element, ()> {
+fn create_svd(peripherals: HashMap<String, Peripheral>) -> Result<SvdDevice, ()> {
     let mut svd_peripherals = vec![];
 
     for (name, p) in peripherals {
@@ -69,29 +69,52 @@ fn create_svd(peripherals: HashMap<String, Peripheral>) -> Result<Element, ()> {
 
             registers.push(RegisterCluster::Register(SvdRegister::Single(info)));
         }
+        let block_size = registers.iter().fold(0, |sum, reg| {
+            sum + match reg {
+                RegisterCluster::Register(r) => r.size.unwrap(),
+                _ => unimplemented!(),
+            }
+        });
         let out = PeripheralBuilder::default()
             .name(name.to_owned())
             .base_address(p.address)
             .registers(Some(registers))
+            .address_block(Some(AddressBlock {
+                offset: 0x0,
+                size: block_size, // TODO what about derived peripherals?
+                usage: "registers".to_string(),
+            }))
             .build()
             .unwrap();
 
-        svd_peripherals.push(out.encode().unwrap());
+        svd_peripherals.push(out);
     }
     println!("Len {}", svd_peripherals.len());
 
-    let mut children = vec![];
-    children.push(Element {
-        text: Some("Espressif".to_owned()),
-        ..Element::new("name")
-    });
-    children.push(Element {
-        children: svd_peripherals,
-        ..Element::new("peripherals")
-    });
-    let out = Element {
-        children: children,
-        ..Element::new("device")
-    };
-    Ok(out)
+    let cpu = CpuBuilder::default()
+        .name("Xtensa LX6".to_string())
+        .revision("1".to_string())
+        .endian(Endian::Little)
+        .mpu_present(false)
+        .fpu_present(true)
+        // according to https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/intr_alloc.html#macros
+        // 7 levels so 3 bits? //TODO verify
+        .nvic_priority_bits(3)
+        .has_vendor_systick(false)
+        .build()
+        .unwrap();
+
+    let device = DeviceBuilder::default()
+        .name("Espressif".to_string())
+        .version(Some("1.0".to_string()))
+        .schema_version(Some("1.0".to_string()))
+        .description(Some("ESP32".to_string()))
+        .width(Some(32))
+        .address_unit_bits(Some(8))
+        .cpu(Some(cpu))
+        .peripherals(svd_peripherals)
+        .build()
+        .unwrap();
+
+    Ok(device)
 }
