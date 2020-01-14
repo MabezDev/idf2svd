@@ -108,9 +108,8 @@ fn create_svd(peripherals: HashMap<String, Peripheral>) -> Result<SvdDevice, ()>
         .name("Espressif".to_string())
         .version(Some("1.0".to_string()))
         .schema_version(Some("1.0".to_string()))
-        // broken see: https://github.com/rust-embedded/svd/pull/104
-        // .description(Some("ESP32".to_string()))
-        // .address_unit_bits(Some(8))
+        .description(Some("ESP32".to_string()))
+        .address_unit_bits(Some(8))
         .width(Some(32))
         .cpu(Some(cpu))
         .peripherals(svd_peripherals)
