@@ -131,6 +131,8 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     let mut invalid_registers = vec![];
     let mut invalid_bit_fields = vec![];
 
+    let mut interrupts = vec![];
+
     let filname = path.to_owned() + "soc.h";
     let re_base = Regex::new(REG_BASE).unwrap();
     let re_reg = Regex::new(REG_DEF).unwrap();
@@ -145,11 +147,12 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
         let name = &captures[1];
         let index = &captures[2];
         let desc = &captures[3];
-        let _intr = Interrupt {
+        let intr = Interrupt {
             name: name.to_string(),
             description: Some(desc.to_string()),
             value: index.parse().unwrap(),
         };
+        interrupts.push(intr);
         // println!("{:#?}", intr);
     }
 
@@ -265,8 +268,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                         }
                         State::FindDescription(ref mut pname, ref mut reg, ref mut bf) => {
                             buffer.push(line);
-                            if let Some(m) = re_reg_desc.captures(buffer.join("").as_str()) {
-                                bf.description = m[1].to_string();
+                            if let Some(_m) = re_reg_desc.captures(buffer.join("").as_str()) {
                                 buffer.clear();
                                 reg.bit_fields.push(bf.clone()); // add the bit field to the reg
                                 state = State::CheckEnd(pname.clone(), reg.clone());
@@ -319,6 +321,8 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
             invalid_bit_fields
         );
     }
+
+    // println!("Interrupt information: {:#?}", interrupts);
 
     peripherals
 }
