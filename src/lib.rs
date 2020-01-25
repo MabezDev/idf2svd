@@ -128,6 +128,7 @@ enum State {
 pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
     let mut invalid_peripherals = vec![];
+    let mut invalid_files = vec![];
     let mut invalid_registers = vec![];
     let mut invalid_bit_fields = vec![];
 
@@ -188,7 +189,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
             let mut buffer = vec![];
             let file_data = file_to_string(name);
             // println!("Searching {}", name);
-
+            let mut something_found = false;
             let mut state = State::FindReg;
             for (i, line) in file_data.lines().enumerate() {
                 loop {
@@ -231,6 +232,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                             break; // next line
                         }
                         State::FindBitFieldInfo(ref mut pname, ref mut reg) => {
+                            something_found = true;
                             if let Some(m) = re_reg_bit_info.captures(line) {
                                 let bf_name = &m[1];
                                 let access_type = &m[2]; // TODO
@@ -298,9 +300,22 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
                     }
                 }
             }
+
+            // log if nothing was parsed in this file
+            if !something_found {
+                invalid_files.push(String::from(name))
+            }
         });
 
     println!("Parsed idf for peripherals information.");
+
+    if invalid_files.len() > 0 {
+        println!(
+            "The following files contained no parsable information {:?}",
+            invalid_files
+        );
+    }
+
     if invalid_peripherals.len() > 0 {
         println!(
             "The following peripherals failed to parse {:?}",
