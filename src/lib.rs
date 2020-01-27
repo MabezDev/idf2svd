@@ -23,9 +23,12 @@ pub struct Peripheral {
     pub description: String,
     pub address: u32,
     pub registers: Vec<Register>,
+    pub interrupts: Vec<Interrupt>,
 }
+
 #[derive(Clone, Debug, Default)]
 pub struct Interrupt {
+    pub peripheral: String,
     pub name: String,
     pub description: Option<String>,
     pub value: u32,
@@ -125,6 +128,20 @@ enum State {
     CheckEnd(String, Register),
 }
 
+/// Uses the first segment of an interrupt name as the name
+/// of the associated peripheral and maps incorrect peripheral
+/// names to the correct names.
+fn peripheral_for_interrupt(interrupt_name: &str) -> String {
+    let parts: Vec<&str> = interrupt_name.split("_").collect();
+    match parts[0] {
+        "FROM" => { "DPORT" },
+        "RTC" => { "RTCCNTL" },
+        "SDIO" => { "SDMMC" },
+        "ETH" => { "EMAC" },
+        x => { x },
+    }.to_string()
+}
+
 pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
     let mut invalid_peripherals = vec![];
@@ -149,12 +166,13 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
         let index = &captures[2];
         let desc = &captures[3];
         let intr = Interrupt {
+            peripheral: peripheral_for_interrupt(name),
             name: name.to_string(),
             description: Some(desc.to_string()),
             value: index.parse().unwrap(),
         };
+        //println!("{:#?}", intr);
         interrupts.push(intr);
-        // println!("{:#?}", intr);
     }
 
     /*
@@ -337,8 +355,34 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
         );
     }
 
-    // println!("Interrupt information: {:#?}", interrupts);
+    /*
+        Peripherals required by interrupts but not extracted from the source
+    */
+    peripherals.insert("WIFI".to_string(), Peripheral::default());
+    peripherals.insert("RWBT".to_string(), Peripheral::default());
+    peripherals.insert("RWBLE".to_string(), Peripheral::default());
+    peripherals.insert("MMU".to_string(), Peripheral::default());
+    peripherals.insert("MPU".to_string(), Peripheral::default());
+    peripherals.insert("CACHE".to_string(), Peripheral::default());
+    peripherals.insert("WDT".to_string(), Peripheral::default());
 
+    /*
+        Associate interrupts with peripherals
+    */
+    interrupts.iter().for_each(|intr| {
+        match peripherals.get_mut(&intr.peripheral) {
+            Some(peripheral) => { peripheral.interrupts.push(intr.clone()); }
+            None => {
+                println!(
+                    "Failed to match peripheral {:?} for interrupt {:?}",
+                    intr.peripheral,
+                    intr.name,
+                )
+            }
+        }
+    });
+
+    // println!("Interrupt information: {:#?}", interrupts);
     peripherals
 }
 
