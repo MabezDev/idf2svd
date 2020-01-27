@@ -128,10 +128,16 @@ enum State {
     CheckEnd(String, Register),
 }
 
+/// Uses the first segment of an interrupt name as the name
+/// of the associated peripheral and maps incorrect peripheral
+/// names to the correct names.
 fn peripheral_for_interrupt(interrupt_name: &str) -> String {
     let parts: Vec<&str> = interrupt_name.split("_").collect();
     match parts[0] {
         "FROM" => { "DPORT" },
+        "RTC" => { "RTCCNTL" },
+        "SDIO" => { "SDMMC" },
+        "ETH" => { "EMAC" },
         x => { x },
     }.to_string()
 }
@@ -358,9 +364,6 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     peripherals.insert("MMU".to_string(), Peripheral::default());
     peripherals.insert("MPU".to_string(), Peripheral::default());
     peripherals.insert("CACHE".to_string(), Peripheral::default());
-    peripherals.insert("SDIO".to_string(), Peripheral::default());
-    peripherals.insert("ETH".to_string(), Peripheral::default());
-    peripherals.insert("RTC".to_string(), Peripheral::default());
     peripherals.insert("WDT".to_string(), Peripheral::default());
 
     /*
