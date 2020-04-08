@@ -1,16 +1,12 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufWriter;
-use std::ops::RangeInclusive;
-use std::str::FromStr;
 
 use regex::Regex;
-use svd_parser::{
-    addressblock::AddressBlock, bitrange::BitRangeType, cpu::CpuBuilder, device::DeviceBuilder,
-    encode::Encode, endian::Endian, fieldinfo::FieldInfoBuilder, peripheral::PeripheralBuilder,
-    registerinfo::RegisterInfoBuilder, Access, BitRange, Device as SvdDevice, Field,
-    Register as SvdRegister, RegisterCluster,
+use svd_parser::encode::Encode;
+
+use crate::common::{
+    build_svd, file_to_string, BitField, Bits, Interrupt, Peripheral, Register, Type,
 };
 
 mod doc_input;
@@ -33,7 +29,7 @@ const REPLACEMENTS_REGEX: &'static [(&'static str, &'static str)] = &[
     (r"(SLC_[^\s]+)[\s]+(\(REG_SLC_BASE \+ )", "${1}_REG $2"),
 ];
 
-/* Regex's to find all the peripheral addresses */
+// Regexes to find all the peripheral addresses
 pub const REG_BASE: &'static str =
     r"\#define[\s*]+(?:DR_REG|REG|PERIPHS)_(.*)_BASE(?:_?A?DDR)?[\s*]+\(?0x([0-9a-fA-F]+)\)?";
 pub const REG_DEF: &'static str = r"\#define[\s*]+(?:PERIPHS_)?([^\s*]+)_(?:REG|ADDRESS|U|ADDR)[\s*]+\((?:DR_REG|REG|PERIPHS)_(.*)_BASE(?:_?A?DDR)? \+ (.*)\)";
@@ -51,105 +47,6 @@ pub const INTERRUPTS: &'static str =
 pub const REG_IFDEF: &'static str = r"#ifn?def.*";
 pub const REG_ENDIF: &'static str = r"#endif";
 
-#[derive(Debug, Default, Clone)]
-pub struct Peripheral {
-    pub description: String,
-    pub address: u32,
-    pub registers: Vec<Register>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Interrupt {
-    pub name: String,
-    pub description: Option<String>,
-    pub value: u32,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Register {
-    /// Register Name
-    pub name: String,
-    /// Relative Address
-    pub address: u32,
-    /// Width
-    pub width: u8,
-    /// Description
-    pub description: String,
-    /// Reset Value
-    pub reset_value: u64,
-    /// Detailed description
-    pub detailed_description: Option<String>,
-    pub bit_fields: Vec<BitField>,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct BitField {
-    /// Field Name
-    pub name: String,
-    /// Bits
-    pub bits: Bits,
-    /// Type
-    pub type_: Type,
-    /// Reset Value
-    pub reset_value: u32,
-    /// Description
-    pub description: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum Bits {
-    Single(u8),
-    Range(RangeInclusive<u8>),
-}
-
-impl Default for Bits {
-    fn default() -> Self {
-        Bits::Single(0)
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Type {
-    // ReadAsZero,
-    ReadOnly,
-    ReadWrite,
-    WriteOnly,
-    // ReadWriteSetOnly,
-    // ReadableClearOnRead,
-    // ReadableClearOnWrite,
-    // WriteAsZero,
-    // WriteToClear,
-}
-
-impl From<Type> for Access {
-    fn from(t: Type) -> Self {
-        match t {
-            Type::ReadOnly => Access::ReadOnly,
-            Type::ReadWrite => Access::ReadWrite,
-            Type::WriteOnly => Access::WriteOnly,
-        }
-    }
-}
-
-impl Default for Type {
-    fn default() -> Type {
-        Type::ReadWrite
-    }
-}
-
-impl FromStr for Type {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Type, Self::Err> {
-        Ok(match s {
-            "RO" | "R/O" => Type::ReadOnly,
-            "RW" | "R/W" => Type::ReadWrite,
-            "WO" | "W/O" => Type::WriteOnly,
-            _ => return Err(String::from("Invalid BitField type: ") + &String::from(s)),
-        })
-    }
-}
-
 enum State {
     FindReg,
     FindBitFieldMask(String, Register),
@@ -162,10 +59,12 @@ enum State {
 
 fn add_base_addr(header: &str, peripherals: &mut HashMap<String, Peripheral>) {
     let re_base = Regex::new(REG_BASE).unwrap();
-    /* Peripheral base addresses */
+
+    // Peripheral base addresses
     for captures in re_base.captures_iter(header) {
         let peripheral = &captures[1];
         let address = &captures[2];
+
         let mut p = Peripheral::default();
         p.address = u32::from_str_radix(address, 16).unwrap();
         p.description = peripheral.to_string();
@@ -483,116 +382,6 @@ fn parse_sdk() -> HashMap<String, Peripheral> {
     peripherals
 }
 
-fn file_to_string(fil: &str) -> String {
-    let mut soc = File::open(fil).unwrap();
-    let mut data = String::new();
-    soc.read_to_string(&mut data).unwrap();
-    data
-}
-
-fn build_svd(peripherals: HashMap<String, Peripheral>) -> Result<SvdDevice, ()> {
-    let mut svd_peripherals = vec![];
-
-    for (name, p) in peripherals {
-        let mut registers = vec![];
-        for r in p.registers {
-            let mut fields = vec![];
-            for field in &r.bit_fields {
-                let description = if field.description.trim().is_empty() {
-                    None
-                } else {
-                    Some(field.description.clone())
-                };
-
-                let bit_range = match &field.bits {
-                    Bits::Single(bit) => BitRange {
-                        offset: u32::from(*bit),
-                        width: 1,
-                        range_type: BitRangeType::OffsetWidth,
-                    },
-                    Bits::Range(r) => BitRange {
-                        offset: u32::from(*r.start()),
-                        width: u32::from(r.end() - r.start() + 1),
-                        range_type: BitRangeType::OffsetWidth,
-                    },
-                };
-
-                let field_out = FieldInfoBuilder::default()
-                    .name(field.name.clone())
-                    .description(description)
-                    .bit_range(bit_range)
-                    .access(Some(field.type_.into()))
-                    .build()
-                    .unwrap();
-                fields.push(Field::Single(field_out));
-            }
-
-            let info = RegisterInfoBuilder::default()
-                .name(r.name.clone())
-                .description(Some(r.description.clone()))
-                .address_offset(r.address)
-                .size(Some(32))
-                .reset_value(Some(r.reset_value as u32))
-                .fields(Some(fields))
-                .build()
-                .unwrap();
-
-            registers.push(RegisterCluster::Register(SvdRegister::Single(info)));
-        }
-        let block_size = registers.iter().fold(0, |sum, reg| {
-            sum + match reg {
-                RegisterCluster::Register(r) => r.size.unwrap(),
-                _ => unimplemented!(),
-            }
-        });
-        let out = PeripheralBuilder::default()
-            .name(name.to_owned())
-            .base_address(p.address)
-            .registers(Some(registers))
-            .address_block(Some(AddressBlock {
-                offset: 0x0,
-                size: block_size, // TODO what about derived peripherals?
-                usage: "registers".to_string(),
-            }))
-            .build()
-            .unwrap();
-
-        svd_peripherals.push(out);
-    }
-
-    svd_peripherals.sort_by(|a, b| a.name.cmp(&b.name));
-
-    println!("Len {}", svd_peripherals.len());
-
-    let cpu = CpuBuilder::default()
-        .name("Xtensa LX106".to_string())
-        .revision("1".to_string())
-        .endian(Endian::Little)
-        .mpu_present(false)
-        .fpu_present(true)
-        // according to https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/intr_alloc.html#macros
-        // 7 levels so 3 bits? //TODO verify
-        .nvic_priority_bits(3)
-        .has_vendor_systick(false)
-        .build()
-        .unwrap();
-
-    let device = DeviceBuilder::default()
-        .name("Espressif".to_string())
-        .version(Some("1.0".to_string()))
-        .schema_version(Some("1.0".to_string()))
-        // broken see: https://github.com/rust-embedded/svd/pull/104
-        // .description(Some("ESP32".to_string()))
-        // .address_unit_bits(Some(8))
-        .width(Some(32))
-        .cpu(Some(cpu))
-        .peripherals(svd_peripherals)
-        .build()
-        .unwrap();
-
-    Ok(device)
-}
-
 pub fn create_svd() {
     let mut peripherals = parse_sdk();
 
@@ -639,7 +428,8 @@ pub fn create_svd() {
     }
     peripherals.insert("SPI".to_string(), spi);
 
-    let svd = build_svd(peripherals).unwrap();
+    let cpu_name = String::from("Xtensa LX106");
+    let svd = build_svd(cpu_name, peripherals).unwrap();
 
     let f = BufWriter::new(File::create("esp8266.svd").unwrap());
     svd.encode().unwrap().write(f).unwrap();

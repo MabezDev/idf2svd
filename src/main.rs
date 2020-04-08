@@ -1,5 +1,6 @@
 use clap::{app_from_crate, Arg};
 
+mod common;
 mod idf;
 mod sdk;
 
