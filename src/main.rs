@@ -8,7 +8,7 @@ fn main() {
     let matches = app_from_crate!("\n")
         .arg(
             Arg::with_name("CHIP")
-                .help("select which device to target")
+                .help("which device's SVD to generate")
                 .required(true)
                 .index(1)
                 .possible_values(&["ESP32", "ESP8266"])

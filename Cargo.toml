@@ -1,12 +1,25 @@
 [package]
 name = "header2svd"
-description = ""
-version = "0.1.0"
-authors = ["Scott Mabin <scott@mabez.dev>"]
+description = "A tool for generating SVD files for the ESP32 and ESP8266"
+version = "0.2.0"
+authors = [
+    "Scott Mabin <scott@mabez.dev>",
+    "Robin Appelman <robin@icewind.nl>",
+    "Jesse Braham <jesse@beta7.io",
+]
 repository = "https://github.com/MabezDev/idf2svd"
 edition = "2018"
-categories = []
-keywords = []
+categories = [
+    "command-line-utilities",
+    "embedded",
+    "hardware-support",
+]
+keywords = [
+    "embedded",
+    "esp32",
+    "esp8266",
+    "svd",
+]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 
