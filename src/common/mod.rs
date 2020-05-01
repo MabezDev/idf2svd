@@ -179,7 +179,11 @@ pub fn build_svd(
         let out = PeripheralBuilder::default()
             .name(name.to_owned())
             .base_address(p.address)
-            .registers(Some(registers))
+            .registers(if registers.is_empty() {
+                None
+            } else {
+                Some(registers)
+            })
             .address_block(Some(AddressBlock {
                 offset: 0x0,
                 size: block_size, // TODO what about derived peripherals?
