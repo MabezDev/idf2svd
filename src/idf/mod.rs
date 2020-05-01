@@ -1,122 +1,26 @@
-use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::prelude::*;
-use std::ops::RangeInclusive;
+use std::io::BufWriter;
 use std::str::FromStr;
 
-/* Regex's to find all the peripheral addresses */
-pub const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
-pub const REG_DEF: &'static str = r"\#define[\s*]+([^\s*]+)_REG[\s*]+\(DR_REG_(.*)_BASE \+ (.*)\)";
-pub const REG_DEF_INDEX: &'static str =
+use regex::Regex;
+use svd_parser::encode::Encode;
+
+use crate::common::{
+    build_svd, file_to_string, BitField, Bits, Interrupt, Peripheral, Register, Type,
+};
+
+const SOC_BASE_PATH: &'static str = "esp-idf/components/soc/esp32/include/soc/";
+
+// Regexes to find all the peripheral addresses
+const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
+const REG_DEF: &'static str = r"\#define[\s*]+([^\s*]+)_REG[\s*]+\(DR_REG_(.*)_BASE \+ (.*)\)";
+const REG_DEF_INDEX: &'static str =
     r"\#define[\s*]+([^\s*]+)_REG\(i\)[\s*]+\(REG_([0-9A-Za-z_]+)_BASE[\s*]*\(i\) \+ (.*?)\)";
-pub const REG_BITS: &'static str =
-    r"\#define[\s*]+([^\s*]+)_(S|V)[\s*]+\(?(0x[0-9a-fA-F]+|[0-9]+)\)?";
-pub const REG_BIT_INFO: &'static str =
-    r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
-pub const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
-pub const INTERRUPTS: &'static str =
+const REG_BIT_INFO: &'static str = r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za-z_/]+)[\s]+;bitpos:\[(.*)\][\s];default:[\s]+(.*)[\s];[\s]\*/";
+const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
+const INTERRUPTS: &'static str =
     r"\#define[\s]ETS_([0-9A-Za-z_/]+)_SOURCE[\s]+([0-9]+)/\*\*<\s([0-9A-Za-z_/\s,]+)\*/";
-
-#[derive(Debug, Default, Clone)]
-pub struct Peripheral {
-    pub description: String,
-    pub address: u32,
-    pub registers: Vec<Register>,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Interrupt {
-    pub name: String,
-    pub description: Option<String>,
-    pub value: u32,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Register {
-    /// Register Name
-    pub name: String,
-    /// Relative Address
-    pub address: u32,
-    /// Width
-    pub width: u8,
-    /// Description
-    pub description: String,
-    /// Reset Value
-    pub reset_value: u64,
-    /// Detailed description
-    pub detailed_description: Option<String>,
-    pub bit_fields: Vec<BitField>,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct BitField {
-    /// Field Name
-    pub name: String,
-    /// Bits
-    pub bits: Bits,
-    /// Type
-    pub type_: Type,
-    /// Reset Value
-    pub reset_value: u32,
-    /// Description
-    pub description: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum Bits {
-    Single(u8),
-    Range(RangeInclusive<u8>),
-}
-
-impl Default for Bits {
-    fn default() -> Self {
-        Bits::Single(0)
-    }
-}
-
-use svd_parser::Access;
-
-#[derive(Debug, Copy, Clone)]
-pub enum Type {
-    // ReadAsZero,
-    ReadOnly,
-    ReadWrite,
-    WriteOnly,
-    // ReadWriteSetOnly,
-    // ReadableClearOnRead,
-    // ReadableClearOnWrite,
-    // WriteAsZero,
-    // WriteToClear,
-}
-
-impl From<Type> for Access {
-    fn from(t: Type) -> Self {
-        match t {
-            Type::ReadOnly => Access::ReadOnly,
-            Type::ReadWrite => Access::ReadWrite,
-            Type::WriteOnly => Access::WriteOnly,
-        }
-    }
-}
-
-impl Default for Type {
-    fn default() -> Type {
-        Type::ReadWrite
-    }
-}
-
-impl FromStr for Type {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Type, Self::Err> {
-        Ok(match s {
-            "RO" | "R/O" => Type::ReadOnly,
-            "RW" | "R/W" => Type::ReadWrite,
-            "WO" | "W/O" => Type::WriteOnly,
-            _ => return Err(String::from("Invalid BitField type: ") + &String::from(s)),
-        })
-    }
-}
 
 enum State {
     FindReg,
@@ -125,7 +29,7 @@ enum State {
     CheckEnd(String, Register),
 }
 
-pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
+fn parse_idf() -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
     let mut invalid_peripherals = vec![];
     let mut invalid_files = vec![];
@@ -134,7 +38,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
 
     let mut interrupts = vec![];
 
-    let filname = path.to_owned() + "soc.h";
+    let filname = SOC_BASE_PATH.to_owned() + "soc.h";
     let re_base = Regex::new(REG_BASE).unwrap();
     let re_reg = Regex::new(REG_DEF).unwrap();
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
@@ -179,7 +83,7 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
         peripherals.insert(peripheral.to_string(), p);
     }
 
-    std::fs::read_dir(path)
+    std::fs::read_dir(SOC_BASE_PATH)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|f| f.path().to_str().unwrap().ends_with("_reg.h"))
@@ -342,9 +246,11 @@ pub fn parse_idf(path: &str) -> HashMap<String, Peripheral> {
     peripherals
 }
 
-fn file_to_string(fil: &str) -> String {
-    let mut soc = File::open(fil).unwrap();
-    let mut data = String::new();
-    soc.read_to_string(&mut data).unwrap();
-    data
+pub fn create_svd() {
+    let cpu_name = String::from("Xtensa LX6");
+    let peripherals = parse_idf();
+    let svd = build_svd(cpu_name, peripherals).unwrap();
+
+    let f = BufWriter::new(File::create("esp32.svd").unwrap());
+    svd.encode().unwrap().write(f).unwrap();
 }
