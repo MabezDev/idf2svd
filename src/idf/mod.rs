@@ -247,9 +247,10 @@ fn parse_idf() -> HashMap<String, Peripheral> {
 }
 
 pub fn create_svd() {
+    let device_name = String::from("esp32");
     let cpu_name = String::from("Xtensa LX6");
     let peripherals = parse_idf();
-    let svd = build_svd(cpu_name, peripherals).unwrap();
+    let svd = build_svd(device_name, cpu_name, peripherals).unwrap();
 
     let f = BufWriter::new(File::create("esp32.svd").unwrap());
     svd.encode().unwrap().write(f).unwrap();
