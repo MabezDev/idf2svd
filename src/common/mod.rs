@@ -119,6 +119,7 @@ pub fn file_to_string(file: &str) -> String {
 }
 
 pub fn build_svd(
+    device_name: String,
     cpu_name: String,
     peripherals: HashMap<String, Peripheral>,
 ) -> Result<SvdDevice, ()> {
@@ -213,7 +214,7 @@ pub fn build_svd(
         .unwrap();
 
     let device = DeviceBuilder::default()
-        .name("Espressif".to_string())
+        .name(device_name)
         .version(Some("1.0".to_string()))
         .schema_version(Some("1.0".to_string()))
         // broken see: https://github.com/rust-embedded/svd/pull/104

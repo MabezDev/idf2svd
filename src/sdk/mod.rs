@@ -428,8 +428,9 @@ pub fn create_svd() {
     }
     peripherals.insert("SPI".to_string(), spi);
 
+    let device_name = String::from("esp8266");
     let cpu_name = String::from("Xtensa LX106");
-    let svd = build_svd(cpu_name, peripherals).unwrap();
+    let svd = build_svd(device_name, cpu_name, peripherals).unwrap();
 
     let f = BufWriter::new(File::create("esp8266.svd").unwrap());
     svd.encode().unwrap().write(f).unwrap();
