@@ -71,6 +71,8 @@ fn decode_table(input: Table) -> Peripheral {
         }
     }
 
+    peripheral.registers.push(reg.clone());
+
     peripheral
 }
 
