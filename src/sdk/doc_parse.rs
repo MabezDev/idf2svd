@@ -47,6 +47,11 @@ fn decode_table(input: Table) -> Peripheral {
             && row.bit_pos.is_some()
             && (row.ty.is_some() || !row.signal.is_empty())
         {
+            // on new signals we change the permissions back to default
+            if !row.signal.is_empty() {
+                last_type = Type::ReadWrite;
+            }
+
             // start of new bitfield
             let bit_field = BitField {
                 name: row.signal,
