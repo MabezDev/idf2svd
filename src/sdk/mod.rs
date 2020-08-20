@@ -408,7 +408,7 @@ pub fn create_svd() {
     peripherals.insert("UART1".to_string(), uart_peripheral_1);
 
     let mut spi = parse_doc("build/spi.json");
-    spi.address = 0x60000200;
+    spi.address = 0x60000100;
     for i in 0..16 {
         spi.registers.push(Register {
             name: format!("SPI_W{}", i),
@@ -426,7 +426,9 @@ pub fn create_svd() {
             detailed_description: None,
         })
     }
-    peripherals.insert("SPI".to_string(), spi);
+    peripherals.insert("SPI1".to_string(), spi.clone());
+    spi.address = 0x60000200;
+    peripherals.insert("SPI0".to_string(), spi);
 
     let device_name = String::from("esp8266");
     let cpu_name = String::from("Xtensa LX106");
