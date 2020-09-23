@@ -412,16 +412,16 @@ pub fn create_svd() {
     for i in 0..16 {
         spi.registers.push(Register {
             name: format!("SPI_W{}", i),
-            address: 0x40 + (i * 32),
+            address: 0x40 + (i * 4),
             width: 32,
-            description: format!("the data inside the buffer of the SPI module, byte {}", i),
+            description: format!("the data inside the buffer of the SPI module, word {}", i),
             reset_value: 0,
             bit_fields: vec![BitField {
                 name: format!("spi_w{}", i),
                 bits: Bits::Range(0..=31),
                 type_: Type::ReadWrite,
                 reset_value: 0,
-                description: format!("the data inside the buffer of the SPI module, byte {}", i),
+                description: format!("the data inside the buffer of the SPI module, word {}", i),
             }],
             detailed_description: None,
         })
@@ -432,7 +432,8 @@ pub fn create_svd() {
 
     let device_name = String::from("esp8266");
     let cpu_name = String::from("Xtensa LX106");
-    let svd = build_svd(device_name, cpu_name, peripherals).unwrap();
+    let mut svd = build_svd(device_name, cpu_name, peripherals).unwrap();
+    svd.address_unit_bits = Some(8);
 
     let f = BufWriter::new(File::create("esp8266.svd").unwrap());
     svd.encode().unwrap().write(f).unwrap();
