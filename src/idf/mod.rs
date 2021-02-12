@@ -7,10 +7,8 @@ use regex::Regex;
 use svd_parser::encode::Encode;
 
 use crate::common::{
-    build_svd, file_to_string, BitField, Bits, Interrupt, Peripheral, Register, Type,
+    build_svd, file_to_string, BitField, Bits, ChipType, Interrupt, Peripheral, Register, Type,
 };
-
-const SOC_BASE_PATH: &'static str = "esp-idf/components/soc/esp32/include/soc/";
 
 // Regexes to find all the peripheral addresses
 const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
@@ -21,6 +19,7 @@ const REG_BIT_INFO: &'static str = r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za
 const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
 const INTERRUPTS: &'static str =
     r"\#define[\s]ETS_([0-9A-Za-z_/]+)_SOURCE[\s]+([0-9]+)/\*\*<\s([0-9A-Za-z_/\s,]+)\*/";
+const INTERRUPTS_C3: &'static str = r"\#define[\s]ETS_([0-9A-Za-z_/]+)_INUM[\s]+([0-9]+)";
 
 enum State {
     FindReg,
@@ -29,7 +28,7 @@ enum State {
     CheckEnd(String, Register),
 }
 
-fn parse_idf() -> HashMap<String, Peripheral> {
+fn parse_idf(chip: &ChipType) -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
     let mut invalid_peripherals = vec![];
     let mut invalid_files = vec![];
@@ -38,31 +37,40 @@ fn parse_idf() -> HashMap<String, Peripheral> {
 
     let mut interrupts = vec![];
 
-    let filname = SOC_BASE_PATH.to_owned() + "soc.h";
+    let soc_base_path = format!(
+        "esp-idf/components/soc/{}/include/soc/",
+        chip.to_string().to_lowercase()
+    );
+    let filename = format!("{}{}", soc_base_path, "soc.h");
     let re_base = Regex::new(REG_BASE).unwrap();
     let re_reg = Regex::new(REG_DEF).unwrap();
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
     let re_reg_desc = Regex::new(REG_DESC).unwrap();
     let re_reg_bit_info = Regex::new(REG_BIT_INFO).unwrap();
-    let re_interrupts = Regex::new(INTERRUPTS).unwrap();
+    let re_interrupts = match chip {
+        ChipType::ESP32 => Regex::new(INTERRUPTS).unwrap(),
+        ChipType::ESP32C3 => Regex::new(INTERRUPTS_C3).unwrap(),
+        _ => unreachable!(),
+    };
 
-    let soc_h = file_to_string(&filname);
+    let soc_h = file_to_string(&filename);
 
     for captures in re_interrupts.captures_iter(soc_h.as_str()) {
-        let name = &captures[1];
-        let index = &captures[2];
-        let desc = &captures[3];
+        let name = captures.get(1).map_or("", |m| m.as_str());
+        let index = captures.get(2).map_or("", |m| m.as_str());
+        let desc = captures
+            .get(3)
+            .map_or(None, |m| Some(m.as_str().to_owned()));
         let intr = Interrupt {
             name: name.to_string(),
-            description: Some(desc.to_string()),
+            description: desc,
             value: index.parse().unwrap(),
         };
         interrupts.push(intr);
-        // println!("{:#?}", intr);
     }
 
     /*
-       Theses are indexed, we seed these as they cannot be derived from the docs
+       These are indexed, we seed these as they cannot be derived from the docs
        These blocks are identical, so we need to do some post processing to properly index
        and offset these
     */
@@ -72,6 +80,13 @@ fn parse_idf() -> HashMap<String, Peripheral> {
     peripherals.insert("MCPWM".to_string(), Peripheral::default());
     peripherals.insert("UHCI".to_string(), Peripheral::default());
 
+    if *chip == ChipType::ESP32C3 {
+        peripherals.insert("I2S".to_string(), Peripheral::default());
+        peripherals.insert("SPI_MEM".to_string(), Peripheral::default());
+        peripherals.insert("GPIO_SD".to_string(), Peripheral::default());
+        peripherals.insert("INTERRUPT_CORE0".to_string(), Peripheral::default());
+    }
+
     /* Peripheral base addresses */
     for captures in re_base.captures_iter(soc_h.as_str()) {
         let peripheral = &captures[1];
@@ -79,11 +94,11 @@ fn parse_idf() -> HashMap<String, Peripheral> {
         let mut p = Peripheral::default();
         p.address = u32::from_str_radix(address, 16).unwrap();
         p.description = peripheral.to_string();
-
+        // println!("Added peripheral: {}", peripheral);
         peripherals.insert(peripheral.to_string(), p);
     }
 
-    std::fs::read_dir(SOC_BASE_PATH)
+    std::fs::read_dir(soc_base_path)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|f| f.path().to_str().unwrap().ends_with("_reg.h"))
@@ -189,7 +204,7 @@ fn parse_idf() -> HashMap<String, Peripheral> {
                                     p.registers.push(reg.clone());
                                 } else {
                                     // TODO indexed peripherals wont come up here
-                                    // println!("No periphal called {}", pname.to_string());
+                                    println!("No peripheral called {}", pname.to_string());
                                     invalid_peripherals.push(pname.to_string());
                                 }
                                 state = State::FindReg;
@@ -246,12 +261,11 @@ fn parse_idf() -> HashMap<String, Peripheral> {
     peripherals
 }
 
-pub fn create_svd() {
-    let device_name = String::from("esp32");
-    let cpu_name = String::from("Xtensa LX6");
-    let peripherals = parse_idf();
-    let svd = build_svd(device_name, cpu_name, peripherals).unwrap();
+pub fn create_svd(chip: ChipType) {
+    let peripherals = parse_idf(&chip);
+    let filename = format!("{}{}", chip.to_string(), ".svd");
+    let svd = build_svd(chip, peripherals).unwrap();
 
-    let f = BufWriter::new(File::create("esp32.svd").unwrap());
+    let f = BufWriter::new(File::create(filename).unwrap());
     svd.encode().unwrap().write(f).unwrap();
 }
