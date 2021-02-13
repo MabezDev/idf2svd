@@ -19,7 +19,6 @@ const REG_BIT_INFO: &'static str = r"/\*[\s]+([0-9A-Za-z_]+)[\s]+:[\s]+([0-9A-Za
 const REG_DESC: &'static str = r"\*description:\s(.*[\n|\r|\r\n]?.*)\*/";
 const INTERRUPTS: &'static str =
     r"\#define[\s]ETS_([0-9A-Za-z_/]+)_SOURCE[\s]+([0-9]+)/\*\*<\s([0-9A-Za-z_/\s,]+)\*/";
-const INTERRUPTS_C3: &'static str = r"\#define[\s]ETS_([0-9A-Za-z_/]+)_INUM[\s]+([0-9]+)";
 
 enum State {
     FindReg,
@@ -47,26 +46,21 @@ fn parse_idf(chip: &ChipType) -> HashMap<String, Peripheral> {
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
     let re_reg_desc = Regex::new(REG_DESC).unwrap();
     let re_reg_bit_info = Regex::new(REG_BIT_INFO).unwrap();
-    let re_interrupts = match chip {
-        ChipType::ESP32 => Regex::new(INTERRUPTS).unwrap(),
-        ChipType::ESP32C3 => Regex::new(INTERRUPTS_C3).unwrap(),
-        _ => unreachable!(),
-    };
+    let re_interrupts = Regex::new(INTERRUPTS).unwrap();
 
     let soc_h = file_to_string(&filename);
 
     for captures in re_interrupts.captures_iter(soc_h.as_str()) {
-        let name = captures.get(1).map_or("", |m| m.as_str());
-        let index = captures.get(2).map_or("", |m| m.as_str());
-        let desc = captures
-            .get(3)
-            .map_or(None, |m| Some(m.as_str().to_owned()));
+        let name = &captures[1];
+        let index = &captures[2];
+        let desc = &captures[3];
         let intr = Interrupt {
             name: name.to_string(),
-            description: desc,
+            description: Some(desc.to_string()),
             value: index.parse().unwrap(),
         };
         interrupts.push(intr);
+        // println!("{:#?}", intr);
     }
 
     /*
