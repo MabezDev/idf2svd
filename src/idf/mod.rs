@@ -263,7 +263,7 @@ fn parse_idf(chip: &ChipType) -> HashMap<String, Peripheral> {
 
 pub fn create_svd(chip: ChipType) {
     let peripherals = parse_idf(&chip);
-    let filename = format!("{}{}", chip.to_string(), ".svd");
+    let filename = format!("{}{}", chip.to_string().to_lowercase(), ".svd");
     let svd = build_svd(chip, peripherals).unwrap();
 
     let f = BufWriter::new(File::create(filename).unwrap());
