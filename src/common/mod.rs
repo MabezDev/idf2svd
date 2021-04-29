@@ -213,7 +213,7 @@ pub fn build_svd(
                 .description(Some(r.description.clone()))
                 .address_offset(r.address)
                 .size(Some(32))
-                .reset_value(Some(r.reset_value as u32))
+                .reset_value(Some(r.reset_value))
                 .fields(Some(fields))
                 .build()
                 .unwrap();
@@ -228,7 +228,7 @@ pub fn build_svd(
         });
         let out = PeripheralBuilder::default()
             .name(name.to_owned())
-            .base_address(p.address)
+            .base_address(p.address as u64)
             .registers(if registers.is_empty() {
                 None
             } else {
