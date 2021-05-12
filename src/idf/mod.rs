@@ -1,16 +1,11 @@
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufWriter;
-use std::str::FromStr;
+use std::{collections::HashMap, fs::File, io::BufWriter, str::FromStr};
 
 use regex::Regex;
 use svd_parser::encode::Encode;
 
 use crate::common::{
-    build_svd, file_to_string, BitField, Bits, Interrupt, Peripheral, Register, Type,
+    build_svd, file_to_string, BitField, Bits, ChipType, Interrupt, Peripheral, Register, Type,
 };
-
-const SOC_BASE_PATH: &'static str = "esp-idf/components/soc/esp32/include/soc/";
 
 // Regexes to find all the peripheral addresses
 const REG_BASE: &'static str = r"\#define[\s*]+DR_REG_(.*)_BASE[\s*]+0x([0-9a-fA-F]+)";
@@ -29,29 +24,35 @@ enum State {
     CheckEnd(String, Register),
 }
 
-fn parse_idf() -> HashMap<String, Peripheral> {
+fn parse_idf(chip: &ChipType) -> HashMap<String, Peripheral> {
     let mut peripherals = HashMap::new();
-    let mut invalid_peripherals = vec![];
-    let mut invalid_files = vec![];
-    let mut invalid_registers = vec![];
-    let mut invalid_bit_fields = vec![];
-
     let mut interrupts = vec![];
 
-    let filname = SOC_BASE_PATH.to_owned() + "soc.h";
+    let mut invalid_bit_fields = vec![];
+    let mut invalid_files = vec![];
+    let mut invalid_peripherals = vec![];
+    let mut invalid_registers = vec![];
+
     let re_base = Regex::new(REG_BASE).unwrap();
     let re_reg = Regex::new(REG_DEF).unwrap();
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
-    let re_reg_desc = Regex::new(REG_DESC).unwrap();
     let re_reg_bit_info = Regex::new(REG_BIT_INFO).unwrap();
+    let re_reg_desc = Regex::new(REG_DESC).unwrap();
     let re_interrupts = Regex::new(INTERRUPTS).unwrap();
 
-    let soc_h = file_to_string(&filname);
+    let soc_base_path = format!(
+        "esp-idf/components/soc/{}/include/soc",
+        chip.to_string().to_lowercase()
+    );
+
+    let filename = format!("{}/{}", soc_base_path, "soc.h");
+    let soc_h = file_to_string(&filename);
 
     for captures in re_interrupts.captures_iter(soc_h.as_str()) {
         let name = &captures[1];
         let index = &captures[2];
         let desc = &captures[3];
+
         let intr = Interrupt {
             name: name.to_string(),
             description: Some(desc.to_string()),
@@ -62,7 +63,7 @@ fn parse_idf() -> HashMap<String, Peripheral> {
     }
 
     /*
-       Theses are indexed, we seed these as they cannot be derived from the docs
+       These are indexed, we seed these as they cannot be derived from the docs
        These blocks are identical, so we need to do some post processing to properly index
        and offset these
     */
@@ -72,10 +73,18 @@ fn parse_idf() -> HashMap<String, Peripheral> {
     peripherals.insert("MCPWM".to_string(), Peripheral::default());
     peripherals.insert("UHCI".to_string(), Peripheral::default());
 
+    if *chip == ChipType::ESP32C3 {
+        peripherals.insert("I2S".to_string(), Peripheral::default());
+        peripherals.insert("SPI_MEM".to_string(), Peripheral::default());
+        peripherals.insert("GPIO_SD".to_string(), Peripheral::default());
+        peripherals.insert("INTERRUPT_CORE0".to_string(), Peripheral::default());
+    }
+
     /* Peripheral base addresses */
     for captures in re_base.captures_iter(soc_h.as_str()) {
         let peripheral = &captures[1];
         let address = &captures[2];
+
         let mut p = Peripheral::default();
         p.address = u32::from_str_radix(address, 16).unwrap();
         p.description = peripheral.to_string();
@@ -83,42 +92,32 @@ fn parse_idf() -> HashMap<String, Peripheral> {
         peripherals.insert(peripheral.to_string(), p);
     }
 
-    std::fs::read_dir(SOC_BASE_PATH)
+    std::fs::read_dir(soc_base_path)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|f| f.path().to_str().unwrap().ends_with("_reg.h"))
         .for_each(|f| {
             let name = f.path();
             let name = name.to_str().unwrap();
+
             let mut buffer = vec![];
             let file_data = file_to_string(name);
-            // println!("Searching {}", name);
+
             let mut something_found = false;
             let mut state = State::FindReg;
             for (i, line) in file_data.lines().enumerate() {
                 loop {
                     match state {
                         State::FindReg => {
-                            /* Normal register definitions */
-                            if let Some(m) = re_reg.captures(line) {
-                                let reg_name = &m[1];
-                                let pname = &m[2];
-                                let offset = &m[3].trim_start_matches("0x");
-                                if reg_name.ends_with("(i)") {
-                                    invalid_registers.push(reg_name.to_string());
-                                    // some indexed still get through, ignore them
-                                    break;
-                                }
-                                if let Ok(addr) = u32::from_str_radix(offset, 16) {
-                                    let mut r = Register::default();
-                                    r.description = reg_name.to_string();
-                                    r.name = reg_name.to_string();
-                                    r.address = addr;
-                                    state = State::FindBitFieldInfo(pname.to_string(), r);
-                                } else {
-                                    invalid_registers.push(reg_name.to_string());
-                                }
-                            } else if let Some(m) = re_reg_index.captures(line) {
+                            let captures = if re_reg.is_match(line) {
+                                re_reg.captures(line)
+                            } else if re_reg_index.is_match(line) {
+                                re_reg_index.captures(line)
+                            } else {
+                                None
+                            };
+
+                            if let Some(m) = captures {
                                 let reg_name = &m[1];
                                 let pname = &m[2];
                                 let offset = &m[3].trim_start_matches("0x");
@@ -167,7 +166,7 @@ fn parse_idf() -> HashMap<String, Peripheral> {
                                 };
                                 state = State::FindDescription(pname.clone(), reg.clone(), bf);
                             } else {
-                                println!("Failed to match reg info at {}:{}", name, i);
+                                println!("Failed to match reg info at {}:{} ('{}')", name, i, line);
                                 state = State::FindReg;
                             }
                             break; // next line
@@ -183,19 +182,18 @@ fn parse_idf() -> HashMap<String, Peripheral> {
                         }
                         State::CheckEnd(ref mut pname, ref mut reg) => {
                             if line.is_empty() {
-                                // println!("{} Adding {:#?}", pname, reg);
-                                // were done with this register
+                                // we're done with this register
                                 if let Some(p) = peripherals.get_mut(&pname.to_string()) {
                                     p.registers.push(reg.clone());
                                 } else {
                                     // TODO indexed peripherals wont come up here
-                                    // println!("No periphal called {}", pname.to_string());
+                                    println!("No peripheral called {}", pname.to_string());
                                     invalid_peripherals.push(pname.to_string());
                                 }
                                 state = State::FindReg;
                                 break; // next line
                             } else if re_reg_bit_info.is_match(line) {
-                                // weve found the next bit field in the reg
+                                // we've found the next bit field in the reg
                                 state = State::FindBitFieldInfo(pname.clone(), reg.clone());
                             } else {
                                 break; // next line
@@ -246,12 +244,11 @@ fn parse_idf() -> HashMap<String, Peripheral> {
     peripherals
 }
 
-pub fn create_svd() {
-    let device_name = String::from("esp32");
-    let cpu_name = String::from("Xtensa LX6");
-    let peripherals = parse_idf();
-    let svd = build_svd(device_name, cpu_name, peripherals).unwrap();
+pub fn create_svd(chip: ChipType) {
+    let peripherals = parse_idf(&chip);
+    let filename = format!("{}.svd", chip.to_string().to_lowercase());
+    let svd = build_svd(chip, peripherals).unwrap();
 
-    let f = BufWriter::new(File::create("esp32.svd").unwrap());
+    let f = BufWriter::new(File::create(filename).unwrap());
     svd.encode().unwrap().write(f).unwrap();
 }

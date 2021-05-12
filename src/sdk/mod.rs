@@ -6,7 +6,7 @@ use regex::Regex;
 use svd_parser::encode::Encode;
 
 use crate::common::{
-    build_svd, file_to_string, BitField, Bits, Interrupt, Peripheral, Register, Type,
+    build_svd, file_to_string, BitField, Bits, ChipType, Interrupt, Peripheral, Register, Type,
 };
 
 mod doc_input;
@@ -84,7 +84,7 @@ fn parse_sdk() -> HashMap<String, Peripheral> {
 
     let mut interrupts = vec![];
 
-    let filname = SOC_BASE_PATH.to_owned() + "eagle_soc.h";
+    let filename = SOC_BASE_PATH.to_owned() + "eagle_soc.h";
     let re_reg = Regex::new(REG_DEF).unwrap();
     let re_reg_index = Regex::new(REG_DEF_INDEX).unwrap();
     let re_reg_offset = Regex::new(REG_DEF_OFFSET).unwrap();
@@ -96,7 +96,7 @@ fn parse_sdk() -> HashMap<String, Peripheral> {
     let re_ifdef = Regex::new(REG_IFDEF).unwrap();
     let re_endif = Regex::new(REG_ENDIF).unwrap();
 
-    let soc_h = file_to_string(&filname);
+    let soc_h = file_to_string(&filename);
 
     for captures in re_interrupts.captures_iter(soc_h.as_str()) {
         let name = &captures[1];
@@ -430,9 +430,7 @@ pub fn create_svd() {
     spi.address = 0x60000200;
     peripherals.insert("SPI0".to_string(), spi);
 
-    let device_name = String::from("esp8266");
-    let cpu_name = String::from("Xtensa LX106");
-    let mut svd = build_svd(device_name, cpu_name, peripherals).unwrap();
+    let mut svd = build_svd(ChipType::ESP8266, peripherals).unwrap();
     svd.address_unit_bits = Some(8);
 
     let f = BufWriter::new(File::create("esp8266.svd").unwrap());

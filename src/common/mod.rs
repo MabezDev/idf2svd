@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::ops::RangeInclusive;
-use std::str::FromStr;
+use std::{
+    collections::HashMap, fs::File, io::prelude::*, ops::RangeInclusive, str::FromStr,
+    string::ToString,
+};
 
 use svd_parser::{
     addressblock::AddressBlock, bitrange::BitRangeType, cpu::CpuBuilder, device::DeviceBuilder,
@@ -10,6 +9,46 @@ use svd_parser::{
     registerinfo::RegisterInfoBuilder, Access, BitRange, Device as SvdDevice, Field,
     Register as SvdRegister, RegisterCluster,
 };
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ChipType {
+    ESP32,
+    ESP32C3,
+    ESP8266,
+}
+
+impl ChipType {
+    pub fn detailed_name(&self) -> String {
+        match self {
+            ChipType::ESP32 => "Xtensa LX6".to_owned(),
+            ChipType::ESP32C3 => "RISC-V RV32IMC single-core".to_owned(),
+            ChipType::ESP8266 => "Xtensa LX106".to_owned(),
+        }
+    }
+}
+
+impl ToString for ChipType {
+    fn to_string(&self) -> String {
+        match self {
+            ChipType::ESP32 => "ESP32".to_owned(),
+            ChipType::ESP32C3 => "ESP32C3".to_owned(),
+            ChipType::ESP8266 => "ESP8266".to_owned(),
+        }
+    }
+}
+
+impl FromStr for ChipType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<ChipType, Self::Err> {
+        Ok(match s {
+            "ESP32" => ChipType::ESP32,
+            "ESP32C3" => ChipType::ESP32C3,
+            "ESP8266" => ChipType::ESP8266,
+            _ => return Err(format!("Invalid chip: {}", s)),
+        })
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Peripheral {
@@ -39,6 +78,7 @@ pub struct Register {
     pub reset_value: u64,
     /// Detailed description
     pub detailed_description: Option<String>,
+    /// Bit fields
     pub bit_fields: Vec<BitField>,
 }
 
@@ -105,7 +145,16 @@ impl FromStr for Type {
             "RO" | "R/O" => Type::ReadOnly,
             "RW" | "R/W" => Type::ReadWrite,
             "WO" | "W/O" => Type::WriteOnly,
-            _ => return Err(String::from("Invalid BitField type: ") + &String::from(s)),
+            "R/WTC/SS" => Type::ReadWrite,
+            "R/W/WTC/SS" => Type::ReadWrite,
+            "R/SS/WTC" => Type::ReadWrite,
+            "R/W/SC" => Type::ReadWrite,
+            "R/W/SS" => Type::ReadWrite,
+            "R/W/SS/SC" => Type::ReadWrite,
+            "R/W/WTC" => Type::ReadWrite,
+            "WOD" => Type::WriteOnly,
+            "WT" => Type::WriteOnly,
+            _ => return Err(format!("Invalid BitField type: {}", s)),
         })
     }
 }
@@ -119,8 +168,7 @@ pub fn file_to_string(file: &str) -> String {
 }
 
 pub fn build_svd(
-    device_name: String,
-    cpu_name: String,
+    chip: ChipType,
     peripherals: HashMap<String, Peripheral>,
 ) -> Result<SvdDevice, ()> {
     let mut svd_peripherals = vec![];
@@ -156,6 +204,7 @@ pub fn build_svd(
                     .access(Some(field.type_.into()))
                     .build()
                     .unwrap();
+
                 fields.push(Field::Single(field_out));
             }
 
@@ -164,22 +213,24 @@ pub fn build_svd(
                 .description(Some(r.description.clone()))
                 .address_offset(r.address)
                 .size(Some(32))
-                .reset_value(Some(r.reset_value as u32))
+                .reset_value(Some(r.reset_value))
                 .fields(Some(fields))
                 .build()
                 .unwrap();
 
             registers.push(RegisterCluster::Register(SvdRegister::Single(info)));
         }
+
         let block_size = registers.iter().fold(0, |sum, reg| {
             sum + match reg {
                 RegisterCluster::Register(r) => r.size.unwrap(),
                 _ => unimplemented!(),
             }
         });
+
         let out = PeripheralBuilder::default()
             .name(name.to_owned())
-            .base_address(p.address)
+            .base_address(p.address as u64)
             .registers(if registers.is_empty() {
                 None
             } else {
@@ -201,7 +252,7 @@ pub fn build_svd(
     println!("Len {}", svd_peripherals.len());
 
     let cpu = CpuBuilder::default()
-        .name(cpu_name)
+        .name(chip.detailed_name())
         .revision("1".to_string())
         .endian(Endian::Little)
         .mpu_present(false)
@@ -214,12 +265,11 @@ pub fn build_svd(
         .unwrap();
 
     let device = DeviceBuilder::default()
-        .name(device_name)
+        .name(chip.to_string())
         .version(Some("1.0".to_string()))
         .schema_version(Some("1.0".to_string()))
-        // broken see: https://github.com/rust-embedded/svd/pull/104
-        // .description(Some("ESP32".to_string()))
-        // .address_unit_bits(Some(8))
+        .description(Some(chip.to_string()))
+        .address_unit_bits(Some(8))
         .width(Some(32))
         .cpu(Some(cpu))
         .peripherals(svd_peripherals)
